@@ -2,6 +2,12 @@
 
 A high-performance procedural map generator written in Rust. It uses **Fractal Noise** to generate terrain and **Ray-Casting** to simulate realistic 3D lighting, shadows, and day/night cycles.
 
+## Some results
+
+![archipelago img](/imgs/archipelago.png)
+
+![huge img](/imgs/huge.gif)
+
 ---
 
 ## ✨ Features
