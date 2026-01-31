@@ -8,6 +8,8 @@ A high-performance procedural map generator written in Rust. It uses **Fractal N
 
 ![huge img](/imgs/huge.gif)
 
+![isometric img](/imgs/iso_cycle.gif)
+
 ---
 
 ## ✨ Features
