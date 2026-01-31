@@ -2,17 +2,6 @@
 
 A high-performance procedural map generator written in Rust. It uses **Fractal Noise** to generate terrain and **Ray-Casting** to simulate realistic 3D lighting, shadows, and day/night cycles.
 
-## 🖼️ Gallery
-
-| **Jagged Peaks (Day/Night Cycle)** | **The Archipelago (Static)** |
-| :---: | :---: |
-| ![Jagged Peaks](./img/jagged_peaks.gif) | ![The Archipelago](./img/archipelago.png) |
-| *High Z-Scale (120.0), showing dynamic shadows.* | *Low Scale (80.0), generating scattered islands.* |
-
-### The Titan (High-Res Render)
-![The Titan](./img/the_titan.png)
-*A massive 2000x2000 render showing coastline details.*
-
 ---
 
 ## ✨ Features
