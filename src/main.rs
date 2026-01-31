@@ -10,7 +10,7 @@ use rand::Rng;
 
 // --- CLI ARGUMENTS ---
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Generates ray-traced fantasy maps")]
+#[command(author, version, about = "Generates high-fidelity voxel fantasy maps")]
 struct Args {
     #[arg(short = 'W', long, default_value_t = 400)]
     width: u32,
@@ -21,13 +21,13 @@ struct Args {
     #[arg(short, long, default_value = "output.gif")]
     output: String,
 
-    #[arg(short, long, default_value_t = 999)]
+    #[arg(short, long, default_value_t = 42)]
     seed: u32,
 
     #[arg(long, default_value_t = 150.0)]
     scale: f64,
 
-    #[arg(long, default_value_t = 70.0)]
+    #[arg(long, default_value_t = 60.0)]
     z_scale: f64,
 
     #[arg(long, default_value_t = 60)]
@@ -42,6 +42,7 @@ struct Args {
 
 const SEA_LEVEL: f64 = 0.25;
 
+// --- GEOMETRY STRUCTS ---
 struct HeightMap {
     data: Vec<f64>,
     width: u32,
@@ -66,6 +67,7 @@ impl HeightMap {
                 let mut height = 1.0 - raw.abs(); 
                 height = height.powi(2); 
 
+                // Island Mask
                 let cx = w as f64 / 2.0;
                 let cy = h as f64 / 2.0;
                 let dist = ((x as f64 - cx).powi(2) + (y as f64 - cy).powi(2)).sqrt();
@@ -90,7 +92,6 @@ impl HeightMap {
         }
     }
 
-    // --- HYDRAULIC EROSION ALGORITHM ---
     fn erode(&mut self, cycles: u32) {
         let mut rng = rand::thread_rng();
         let w = self.width as i32;
@@ -99,55 +100,33 @@ impl HeightMap {
         for _ in 0..cycles {
             let mut x = rng.gen_range(1..w - 1) as f64;
             let mut y = rng.gen_range(1..h - 1) as f64;
-            
-            // Explicit f64 types to fix compiler errors
             let mut dir_x: f64 = 0.0;
             let mut dir_y: f64 = 0.0;
             let mut speed: f64 = 1.0;
             let mut water: f64 = 1.0;
             let mut sediment: f64 = 0.0;
 
-            let inertia = 0.05;
-            let capacity = 4.0;
-            let deposition = 0.3;
-            let erosion = 0.3;
-            let evaporation = 0.02;
-            let gravity = 4.0;
-
             for _ in 0..30 {
                 let ix = x as i32;
                 let iy = y as i32;
-                
                 let curr_h = self.get(ix as u32, iy as u32);
-                let h_xp = self.get((ix + 1) as u32, iy as u32);
-                let h_xm = self.get((ix - 1) as u32, iy as u32);
-                let h_yp = self.get(ix as u32, (iy + 1) as u32);
-                let h_ym = self.get(ix as u32, (iy - 1) as u32);
+                
+                let grad_x = self.get((ix - 1) as u32, iy as u32) - self.get((ix + 1) as u32, iy as u32);
+                let grad_y = self.get(ix as u32, (iy - 1) as u32) - self.get(ix as u32, (iy + 1) as u32);
 
-                let grad_x = h_xm - h_xp;
-                let grad_y = h_ym - h_yp;
-
-                // Fixed: Removed unnecessary parentheses
-                dir_x = dir_x * inertia - grad_x * (1.0 - inertia);
-                dir_y = dir_y * inertia - grad_y * (1.0 - inertia);
+                dir_x = dir_x * 0.05 - grad_x * 0.95;
+                dir_y = dir_y * 0.05 - grad_y * 0.95;
                 
                 let len = (dir_x * dir_x + dir_y * dir_y).sqrt();
-                if len != 0.0 {
-                    dir_x /= len;
-                    dir_y /= len;
-                }
+                if len != 0.0 { dir_x /= len; dir_y /= len; }
 
                 x += dir_x;
                 y += dir_y;
 
                 if x < 1.0 || x >= (w - 1) as f64 || y < 1.0 || y >= (h - 1) as f64 { break; }
 
-                let new_ix = x as i32;
-                let new_iy = y as i32;
-                let new_h = self.get(new_ix as u32, new_iy as u32);
-                let diff = new_h - curr_h;
-
-                let max_sediment = water * capacity * speed.min(1.0);
+                let diff = self.get(x as i32 as u32, y as i32 as u32) - curr_h;
+                let max_sediment = water * 4.0 * speed.min(1.0);
 
                 if diff > 0.0 {
                     let amount = sediment.min(diff);
@@ -155,37 +134,35 @@ impl HeightMap {
                     sediment -= amount;
                 } else {
                     if sediment > max_sediment {
-                        let amount = (sediment - max_sediment) * deposition;
+                        let amount = (sediment - max_sediment) * 0.3;
                         self.set(ix as u32, iy as u32, curr_h + amount);
                         sediment -= amount;
                     } else {
-                        let amount = min_f64((max_sediment - sediment) * erosion, -diff);
+                        let amount = min_f64((max_sediment - sediment) * 0.3, -diff);
                         self.set(ix as u32, iy as u32, curr_h - amount);
                         sediment += amount;
                     }
                 }
-
-                speed = (speed * speed + diff * gravity).sqrt();
-                // Fixed: Removed unnecessary parentheses
-                water *= 1.0 - evaporation;
-                
+                speed = (speed * speed + diff * 4.0).sqrt();
+                water *= 0.98;
                 if water < 0.01 { break; }
             }
         }
     }
 }
 
-// Helper for min float since f64 isn't Ord
 fn min_f64(a: f64, b: f64) -> f64 { if a < b { a } else { b } }
+
+// --- MAIN PIPELINE ---
 
 fn main() {
     let args = Args::parse();
-    println!("Generating map: {}x{} | Seed: {}", args.width, args.height, args.seed);
+    println!("Generating Voxel Map: {}x{} | Seed: {}", args.width, args.height, args.seed);
 
     let mut map = HeightMap::new(args.width, args.height, args.seed, args.scale);
     
     if args.erosion_cycles > 0 {
-        println!("Simulating {} erosion cycles... (This might take a moment)", args.erosion_cycles);
+        println!("Running erosion simulation...");
         map.erode(args.erosion_cycles);
     }
 
@@ -200,8 +177,8 @@ fn main() {
 }
 
 fn render_static(map: &HeightMap, args: &Args) {
-    println!("Rendering single static frame...");
-    let img = render_frame(map, 0.0, 0.8, args.z_scale, args.isometric);
+    println!("Rendering high-fidelity static frame...");
+    let img = render_frame(map, 0.0, 0.8, 0.0, args.z_scale, args.isometric);
     img.save(&args.output).unwrap();
     println!("Saved to '{}'", args.output);
 }
@@ -215,172 +192,233 @@ fn render_gif(map: &HeightMap, args: &Args) {
     for f in 0..args.frames {
         let progress = f as f64 / args.frames as f64;
         let sun_azimuth = progress * 2.0 * PI; 
-        let sun_elevation = (progress * PI).sin().max(0.0) * 0.8 + 0.05;
-
-        let frame_img = render_frame(map, sun_azimuth, sun_elevation, args.z_scale, args.isometric);
-        let frame = Frame::from_parts(frame_img, 0, 0, Delay::from_numer_denom_ms(40, 1));
+        // Keep sun relatively high to avoid super long ugly shadows in isometric
+        let sun_elevation = (progress * PI).sin().max(0.0) * 0.6 + 0.2;
+        
+        let img = render_frame(map, sun_azimuth, sun_elevation, progress, args.z_scale, args.isometric);
+        
+        let frame = Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(50, 1));
         encoder.encode_frame(frame).unwrap();
 
-        if f % 10 == 0 { println!("Rendered frame {}/{}", f, args.frames); }
+        if f % 10 == 0 { println!("Frame {}/{}", f, args.frames); }
     }
 }
 
-fn render_frame(map: &HeightMap, sun_angle: f64, sun_elevation: f64, z_scale: f64, isometric: bool) -> RgbaImage {
+// --- RENDERING CORE ---
+
+struct RenderPixel {
+    color: Rgba<u8>,
+    height: f64,
+    is_water: bool,
+}
+
+fn render_frame(map: &HeightMap, sun_angle: f64, sun_elevation: f64, time: f64, z_scale: f64, isometric: bool) -> RgbaImage {
     let width = map.width;
     let height = map.height;
+    
+    // Noise generators for texture detail
+    let water_noise = Perlin::new(100);
+    let terrain_noise = Perlin::new(200);
 
-    // 1. SHADOW MAP PASS
-    let mut color_grid: Vec<Rgba<u8>> = vec![Rgba([0,0,0,0]); (width * height) as usize];
+    // Light Setup
     let light_dir_x = -sun_angle.cos();
     let light_dir_y = -sun_angle.sin();
-    let height_step = sun_elevation.tan(); 
-    let is_night = sun_elevation < 0.1;
-    let (light_r, light_g, light_b) = if is_night { (0.1, 0.1, 0.3) } else if sun_elevation < 0.3 { (1.0, 0.5, 0.2) } else { (1.0, 1.0, 0.9) };
+    let height_step = sun_elevation.tan();
+    
+    // Ambient Light Colors
+    let sun_color = [1.2, 1.1, 1.0]; // Warm sunlight
+    let ambient_sky = [0.2, 0.25, 0.4]; // Cool shadows
+    let sun_intensity = sun_elevation.clamp(0.0, 1.0);
+
+    // --- STEP 1: CALCULATE SURFACE DATA ---
+    // We compute the exact height and color for every grid point first
+    let mut grid: Vec<RenderPixel> = Vec::with_capacity((width * height) as usize);
 
     for y in 0..height {
         for x in 0..width {
-            let h_val = map.get(x, y);
-            let effective_height = if h_val < SEA_LEVEL { SEA_LEVEL } else { h_val };
-            let pixel_h_real = effective_height * z_scale; 
+            let h_base = map.get(x, y);
             
-            let mut in_shadow = false;
-            if !is_night {
-                let mut ray_h = pixel_h_real;
-                let mut ray_x = x as f64;
-                let mut ray_y = y as f64;
-                for _ in 0..150 {
-                    ray_x -= light_dir_x;
-                    ray_y -= light_dir_y;
-                    ray_h += height_step; 
-                    if ray_x < 0.0 || ray_x >= width as f64 || ray_y < 0.0 || ray_y >= height as f64 || ray_h > z_scale { break; }
-                    let tr = map.get(ray_x as u32, ray_y as u32);
-                    if tr < SEA_LEVEL { continue; }
-                    if tr * z_scale > ray_h { in_shadow = true; break; }
+            // Texture Noise (Subtle variation on land)
+            let tex_val = terrain_noise.get([x as f64 * 0.1, y as f64 * 0.1]) * 0.05;
+
+            // Water Calculation
+            let (final_h, is_water, mut base_rgb) = if h_base < SEA_LEVEL {
+                // Animated Water
+                let wave_phase = time * 4.0;
+                let wave = water_noise.get([x as f64 * 0.1, y as f64 * 0.1, wave_phase]);
+                let wave_h = wave * 0.02; // Small vertical displacement
+                
+                let depth = SEA_LEVEL - h_base;
+                let deep_col = [0.1, 0.3, 0.6];
+                let shallow_col = [0.2, 0.5, 0.8];
+                let foam_col = [0.9, 0.95, 1.0];
+                
+                // Mix colors based on depth
+                let t = (depth * 10.0).clamp(0.0, 1.0);
+                let mut r = deep_col[0] * t + shallow_col[0] * (1.0 - t);
+                let mut g = deep_col[1] * t + shallow_col[1] * (1.0 - t);
+                let mut b = deep_col[2] * t + shallow_col[2] * (1.0 - t);
+
+                // Foam at shoreline or wave crests
+                let foam_mask = (wave - 0.5).max(0.0) + (1.0 - (depth/0.05).clamp(0.0, 1.0));
+                if foam_mask > 0.5 {
+                    r = r * 0.5 + foam_col[0] * 0.5;
+                    g = g * 0.5 + foam_col[1] * 0.5;
+                    b = b * 0.5 + foam_col[2] * 0.5;
                 }
-            }
 
-            let base = get_biome_color(h_val);
-            let shadow_fac = if in_shadow { 0.3 } else { 1.0 };
-            let mut spec = 0.0;
-            if h_val < SEA_LEVEL && !in_shadow && !is_night { spec = (sun_elevation * 0.5).powi(2); }
+                (SEA_LEVEL + wave_h, true, [r, g, b])
+            } else {
+                // Land Biomes
+                let h = h_base + tex_val; // Apply texture height noise
+                let c = get_biome_rgb(h_base);
+                // Apply subtle noise to color
+                let noise_tint = 1.0 + (tex_val * 2.0); 
+                (h, false, [c[0] * noise_tint, c[1] * noise_tint, c[2] * noise_tint])
+            };
 
-            let r = (base[0] as f64 * light_r * shadow_fac + spec * 255.0).clamp(0.0, 255.0) as u8;
-            let g = (base[1] as f64 * light_g * shadow_fac + spec * 255.0).clamp(0.0, 255.0) as u8;
-            let b = (base[2] as f64 * light_b * shadow_fac + spec * 255.0).clamp(0.0, 255.0) as u8;
-
-            color_grid[(y * width + x) as usize] = Rgba([r, g, b, 255]);
+            // Convert to 0-255 later, keep as float 0-1 for lighting math
+            grid.push(RenderPixel { 
+                color: Rgba([(base_rgb[0] * 255.0) as u8, (base_rgb[1] * 255.0) as u8, (base_rgb[2] * 255.0) as u8, 255]),
+                height: final_h,
+                is_water
+            });
         }
     }
 
-    if !isometric {
-        let mut img = RgbaImage::new(width, height);
-        for y in 0..height {
-            for x in 0..width {
-                img.put_pixel(x, y, color_grid[(y * width + x) as usize]);
-            }
+    // Helper to get grid data safely
+    let get_pix = |nx: i32, ny: i32| -> Option<&RenderPixel> {
+        if nx >= 0 && nx < width as i32 && ny >= 0 && ny < height as i32 {
+            Some(&grid[(ny * width as i32 + nx) as usize])
+        } else {
+            None
         }
-        return img;
-    }
+    };
 
-    // --- 2. ISOMETRIC RENDER WITH AUTO-SIZING & WALLS ---
-    let mut min_iso_x = i32::MAX;
-    let mut max_iso_x = i32::MIN;
-    let mut min_iso_y = i32::MAX;
-    let mut max_iso_y = i32::MIN;
+    // --- STEP 2: PROJECT & LIGHTING ---
+    // We render directly to the output image using painter's algorithm
+    // Background
+    let sky_r = (30.0 * (1.0 - sun_elevation) + 135.0 * sun_elevation).clamp(0.0, 255.0) as u8;
+    let sky_g = (30.0 * (1.0 - sun_elevation) + 206.0 * sun_elevation).clamp(0.0, 255.0) as u8;
+    let sky_b = (60.0 * (1.0 - sun_elevation) + 235.0 * sun_elevation).clamp(0.0, 255.0) as u8;
+    let sky_color = Rgba([sky_r, sky_g, sky_b, 255]);
 
+    // Setup Isometric bounds
     let project = |x: i32, y: i32, z: f64| -> (i32, i32) {
         let iso_x = x - y;
         let iso_y = ((x + y) as f64 * 0.5 - z) as i32;
         (iso_x, iso_y)
     };
-
+    
+    // Auto-centering logic
+    let mut min_x = i32::MAX; let mut max_x = i32::MIN;
+    let mut min_y = i32::MAX; let mut max_y = i32::MIN;
     let corners = [(0,0), (width as i32, 0), (0, height as i32), (width as i32, height as i32)];
     for (cx, cy) in corners {
         for &cz in &[0.0, z_scale] {
              let (px, py) = project(cx, cy, cz);
-             min_iso_x = min(min_iso_x, px);
-             max_iso_x = max(max_iso_x, px);
-             min_iso_y = min(min_iso_y, py);
-             max_iso_y = max(max_iso_y, py);
+             min_x = min(min_x, px); max_x = max(max_x, px);
+             min_y = min(min_y, py); max_y = max(max_y, py);
         }
     }
+    let pad = 20;
+    let out_w = (max_x - min_x + pad * 2) as u32;
+    let out_h = (max_y - min_y + pad * 2) as u32;
+    let off_x = -min_x + pad;
+    let off_y = -min_y + pad;
 
-    let padding = 20;
-    let final_w = (max_iso_x - min_iso_x + padding * 2) as u32;
-    let final_h = (max_iso_y - min_iso_y + padding * 2) as u32;
-    let offset_x = -min_iso_x + padding;
-    let offset_y = -min_iso_y + padding;
-
-    let mut img = RgbaImage::new(final_w, final_h);
+    let mut img = RgbaImage::from_pixel(out_w, out_h, sky_color);
+    
+    // Z-Buffer for correct depth sorting (simplistic, just y-order is mostly fine for iso, 
+    // but strict painter's algo works better here)
     
     for y in 0..height {
         for x in 0..width {
-            let color = color_grid[(y * width + x) as usize];
-            let h_val = map.get(x, y);
-            let effective_height = if h_val < SEA_LEVEL { SEA_LEVEL } else { h_val };
-            let z = effective_height * z_scale;
-
-            let (px, py) = project(x as i32, y as i32, z);
-            let final_x = px + offset_x;
-            let final_y = py + offset_y;
-
-            if final_x >= 0 && final_x < final_w as i32 && final_y >= 0 && final_y < final_h as i32 {
-                img.put_pixel(final_x as u32, final_y as u32, color);
+            let px_data = &grid[(y * width + x) as usize];
+            let z_real = px_data.height * z_scale;
+            
+            // --- LIGHTING CALCULATION ---
+            
+            // 1. Raycast Shadow
+            let mut in_shadow = false;
+            let mut ray_h = z_real;
+            let mut ray_x = x as f64;
+            let mut ray_y = y as f64;
+            for _ in 0..40 { // Short range shadows are enough for voxel look
+                ray_x -= light_dir_x;
+                ray_y -= light_dir_y;
+                ray_h += height_step;
+                if let Some(obs) = get_pix(ray_x as i32, ray_y as i32) {
+                    if obs.height * z_scale > ray_h { in_shadow = true; break; }
+                } else { break; }
             }
 
-            let mut draw_wall = |nx: u32, ny: u32, side_color: Rgba<u8>| {
-                if nx < width && ny < height {
-                    let n_h = map.get(nx, ny);
-                    let n_eff_h = if n_h < SEA_LEVEL { SEA_LEVEL } else { n_h };
-                    let n_z = n_eff_h * z_scale;
+            // 2. Ambient Occlusion (AO)
+            // Check neighbors. If neighbor is higher, darken this pixel.
+            let mut ao_darkening: f64 = 0.0;
+            let neighbors = [(-1,0), (1,0), (0,-1), (0,1)];
+            for (dx, dy) in neighbors {
+                if let Some(n) = get_pix(x as i32 + dx, y as i32 + dy) {
+                     if n.height > px_data.height {
+                         ao_darkening += 0.15; // Accumulate shadow in corners
+                     }
+                }
+            }
+            ao_darkening = ao_darkening.min(0.6); // Cap AO
 
-                    if z > n_z {
-                        let (_, n_py) = project(x as i32, y as i32, n_z);
-                        let bottom_y = n_py + offset_y;
-                        for wy in (final_y + 1)..=bottom_y {
-                            if final_x >= 0 && final_x < final_w as i32 && wy >= 0 && wy < final_h as i32 {
-                                img.put_pixel(final_x as u32, wy as u32, side_color);
-                            }
+            // 3. Combine Light
+            let shadow_mult = if in_shadow { 0.4 } else { 1.0 };
+            let total_light = (sun_intensity * shadow_mult) * (1.0 - ao_darkening);
+            
+            // Apply light to base color
+            let r = (px_data.color[0] as f64 * (total_light * sun_color[0] + ambient_sky[0] * 0.4)).clamp(0.0, 255.0) as u8;
+            let g = (px_data.color[1] as f64 * (total_light * sun_color[1] + ambient_sky[1] * 0.4)).clamp(0.0, 255.0) as u8;
+            let b = (px_data.color[2] as f64 * (total_light * sun_color[2] + ambient_sky[2] * 0.4)).clamp(0.0, 255.0) as u8;
+            
+            let final_col = Rgba([r, g, b, 255]);
+
+            // --- DRAWING VOXEL ---
+            let (iso_x, iso_y) = project(x as i32, y as i32, z_real);
+            let draw_x = iso_x + off_x;
+            let draw_y = iso_y + off_y;
+
+            if draw_x >= 0 && draw_x < out_w as i32 && draw_y >= 0 && draw_y < out_h as i32 {
+                img.put_pixel(draw_x as u32, draw_y as u32, final_col);
+            }
+
+            // Draw Walls (The dirt underneath)
+            // We darken walls to fake directionality
+            let wall_col = Rgba([(r as f64 * 0.7) as u8, (g as f64 * 0.7) as u8, (b as f64 * 0.7) as u8, 255]);
+            
+            let mut draw_wall = |nx: i32, ny: i32| {
+                let neighbor_z = if let Some(n) = get_pix(nx, ny) { n.height * z_scale } else { 0.0 };
+                if z_real > neighbor_z {
+                     let (_, n_iso_y) = project(x as i32, y as i32, neighbor_z);
+                     let wall_bot = n_iso_y + off_y;
+                     for wy in (draw_y + 1)..=wall_bot {
+                        if draw_x >= 0 && draw_x < out_w as i32 && wy >= 0 && wy < out_h as i32 {
+                            img.put_pixel(draw_x as u32, wy as u32, wall_col);
                         }
-                    }
-                } else {
-                     let (_, n_py) = project(x as i32, y as i32, 0.0);
-                     let bottom_y = n_py + offset_y;
-                     for wy in (final_y + 1)..=bottom_y {
-                        if final_x >= 0 && final_x < final_w as i32 && wy >= 0 && wy < final_h as i32 {
-                            img.put_pixel(final_x as u32, wy as u32, side_color);
-                        }
-                    }
+                     }
                 }
             };
 
-            let dark_color = Rgba([
-                (color[0] as f64 * 0.7) as u8,
-                (color[1] as f64 * 0.7) as u8,
-                (color[2] as f64 * 0.7) as u8,
-                255
-            ]);
-            let darker_color = Rgba([
-                (color[0] as f64 * 0.5) as u8,
-                (color[1] as f64 * 0.5) as u8,
-                (color[2] as f64 * 0.5) as u8,
-                255
-            ]);
-
-            draw_wall(x, y + 1, dark_color);
-            draw_wall(x + 1, y, darker_color);
+            // Only draw walls for front-facing sides in painter's algorithm
+            // (Standard loop order: Back-to-Front Y, Left-to-Right X)
+            draw_wall(x as i32, y as i32 + 1); // Front Left
+            draw_wall(x as i32 + 1, y as i32); // Front Right
         }
     }
-
+    
     img
 }
 
-fn get_biome_color(h: f64) -> Rgba<u8> {
-    if h < SEA_LEVEL - 0.1 { Rgba([10, 30, 80, 255]) }
-    else if h < SEA_LEVEL { Rgba([30, 80, 180, 255]) }
-    else if h < 0.30 { Rgba([210, 200, 120, 255]) }
-    else if h < 0.55 { Rgba([50, 140, 50, 255]) }
-    else if h < 0.75 { Rgba([30, 90, 30, 255]) }
-    else if h < 0.85 { Rgba([100, 100, 100, 255]) }
-    else { Rgba([240, 240, 255, 255]) }
+// Helper: Biome Colors (0.0 - 1.0 RGB)
+fn get_biome_rgb(h: f64) -> [f64; 3] {
+    if h < SEA_LEVEL { [0.0, 0.0, 0.0] } // Water handled separately
+    else if h < 0.28 { [0.86, 0.80, 0.55] } // Sand (Beige)
+    else if h < 0.45 { [0.3, 0.6, 0.2] }   // Grass (Green)
+    else if h < 0.65 { [0.15, 0.45, 0.15] } // Forest (Dark Green)
+    else if h < 0.80 { [0.5, 0.45, 0.4] }   // Rock (Brown/Grey)
+    else { [0.95, 0.95, 1.0] }              // Snow (White)
 }
